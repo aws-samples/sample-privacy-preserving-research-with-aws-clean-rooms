@@ -19,20 +19,21 @@ Sample terminal output from a full run is in [`docs/sample-output.md`](docs/samp
 
 1. [Architecture](#architecture)
 2. [Prerequisites](#prerequisites)
-3. [Configure](#configure)
-4. [Deploy](#deploy)
-5. [Demo runbook](#demo-runbook)
-6. [Privacy controls explained](#privacy-controls-explained)
-7. [Who can see what](#who-can-see-what)
-8. [Logging and audit walkthrough](#logging-and-audit-walkthrough)
-9. [Teardown](#teardown)
-10. [Adapting Airlock to your own data and governance](#adapting-airlock-to-your-own-data-and-governance)
-11. [Demo hardening only](#demo-hardening-only)
-12. [Troubleshooting](#troubleshooting)
-13. [Out of scope](#out-of-scope)
-14. [Working on this repo with Kiro](#working-on-this-repo-with-kiro)
-15. [Security](#security)
-16. [License](#license)
+3. [Cost](#cost)
+4. [Configure](#configure)
+5. [Deploy](#deploy)
+6. [Demo runbook](#demo-runbook)
+7. [Privacy controls explained](#privacy-controls-explained)
+8. [Who can see what](#who-can-see-what)
+9. [Logging and audit walkthrough](#logging-and-audit-walkthrough)
+10. [Teardown](#teardown)
+11. [Adapting Airlock to your own data and governance](#adapting-airlock-to-your-own-data-and-governance)
+12. [Demo hardening only](#demo-hardening-only)
+13. [Troubleshooting](#troubleshooting)
+14. [Out of scope](#out-of-scope)
+15. [Working on this repo with Kiro](#working-on-this-repo-with-kiro)
+16. [Security](#security)
+17. [License](#license)
 
 ## Architecture
 
@@ -89,6 +90,45 @@ Repository layout:
 - **Region support:** AWS Clean Rooms must be available in the configured region (it is in `us-west-2`). Outside `us-east-1` the default quota is 2 concurrent SQL queries per account, so the scripts run queries strictly one at a time.
 
 Exit codes for every script: `0` ok, `1` failure (including config errors), `2` SSO session expired (run the printed `aws sso login` command), `3` logs still pending (`demo_logging` only).
+
+## Cost
+
+You are responsible for the cost of the AWS services used while running this sample. The estimate below gives an idea of what to expect. It isn't a quote: check the [AWS Clean Rooms pricing page](https://aws.amazon.com/clean-rooms/pricing/) and the [AWS Pricing Calculator](https://calculator.aws/) for your own usage.
+
+**In short:** deployed and idle, the sample costs a few cents a month. Nearly all of the cost is Clean Rooms query compute, about **$0.26 per query** with the default config, billed to Account B (the configured query-compute payer).
+
+The estimate uses on-demand prices in `us-west-2` from the AWS Price List API (October 2026). Prices vary by Region and change over time, and taxes, support plans and free-tier credits are not included.
+
+| Service | Price (`us-west-2`) | How the sample uses it |
+|---|---|---|
+| AWS Clean Rooms Spark SQL compute | $1.92 per CRPU-hour (Clean Rooms Processing Unit), billed per second with a 60-second minimum per query. Startup and shutdown time are not charged. | Each protected query runs on `CR.1X` × 4 workers = 8 CRPUs (`query.compute` in the config) |
+| Amazon S3 Standard | $0.023 per GB-month; $0.005 per 1,000 PUT/LIST and $0.004 per 10,000 GET requests | A's synthetic data (well under 1 MB), B's query results (KB) and the CDK bootstrap asset buckets |
+| AWS Glue Data Catalog | $1 per 100,000 objects per month; $1 per 1,000,000 requests | One database and two tables in Account A |
+| Amazon CloudWatch Logs | $0.50 per GB ingested; $0.03 per GB-month stored | Clean Rooms analysis logs (a few KB per query) and deploy logs |
+| AWS Lambda | $0.20 per 1M requests; $0.0000166667 per GB-second | CDK helper functions that run only during deploy and teardown |
+| Clean Rooms collaboration, memberships, configured tables and analysis rules, IAM, CloudFormation, CloudTrail event history | No charge | |
+
+**Per query:** 8 CRPUs × 60 seconds = 0.133 CRPU-hours × $1.92 = **$0.256**. With the synthetic dataset, every query uses well under 60 seconds of compute (the approved query uses about 16 seconds), so each one is billed at the minimum. The 2–4 minutes you wait for a result is mostly service startup, which isn't billed. A query that needs more than 60 seconds of compute is billed per second at $15.36 per hour (8 CRPUs × $1.92).
+
+**Monthly estimate:**
+
+| Scenario | Queries per month | Clean Rooms compute | Everything else | Total |
+|---|---|---|---|---|
+| Deployed, no queries | 0 | $0.00 | < $0.05 | **< $0.05** |
+| One full demo run (`scripts.demo_all`) | 2 successful + 2 rejected | $0.51–$1.02 | < $0.05 | **~$1** |
+| One demo run a week | 8 successful + 8 rejected | $2.05–$4.10 | < $0.05 | **~$2–4** |
+| Regular use: 10 approved queries a working day | 220 | $56.32 | < $0.10 | **~$56** |
+
+The ranges depend on whether queries rejected by the analysis rule are billed. They fail validation within seconds, and this estimate shows both $0 and the 60-second minimum. Running `scripts.demo_allowed` and `scripts.demo_blocked` separately instead of `scripts.demo_all` adds one more approved query, because `demo_blocked` then runs its own control query.
+
+**What changes the cost:**
+
+- **Worker count.** Compute scales with CRPUs. The Clean Rooms default of 32 CRPUs per query would cost about $1.02 per query. Keep `query.compute` small for small datasets.
+- **Number of queries.** Every query pays at least the 60-second minimum, so fewer queries cost less than many small ones.
+- **Data volume.** Larger real datasets can push queries past the 60-second minimum.
+- **Differential privacy.** Not used in this sample. If you add it, it's billed as a separate per-CRPU-hour charge on top of Spark SQL compute.
+
+**Keeping costs down:** run [Teardown](#teardown) when you no longer need the environment, and consider an [AWS Budgets](https://aws.amazon.com/aws-cost-management/aws-budgets/) alert on Account B, since it pays for every query. A few things remain after teardown: the `CDKToolkit` bootstrap stacks (their S3 asset buckets cost cents per month) and the CloudWatch Logs groups described in [Teardown](#teardown) (KB of data).
 
 ## Configure
 
