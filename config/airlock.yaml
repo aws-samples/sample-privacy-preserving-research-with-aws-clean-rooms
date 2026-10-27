@@ -1,0 +1,150 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+# Airlock configuration: the single file teams adapting Airlock edit.
+# Relative paths resolve against the project root (the repository root directory), never the cwd.
+# Override the file with --config PATH or the AIRLOCK_CONFIG environment variable.
+# Unknown keys are rejected so typos fail loudly.
+# The account IDs below are AWS documentation example IDs: replace them with your own.
+# Until you do, deploy and every live script stop at preflight (profile/account mismatch).
+# Institution names are fictional.
+
+project:
+  name: Airlock
+  tags: {Project: Airlock}                 # Tags.of(app) -> resource tags + CFN stack tags (propagated)
+
+region: us-west-2                          # collaboration, Glue, both buckets: same region
+
+accounts:
+  data_owner:                              # Account A (creates the collaboration, owns the data)
+    account_id: "111122223333"             # AWS documentation example ID; replace with your data-owner account (quoted, 12 digits)
+    profile: airlock-a                     # AWS IAM Identity Center (SSO) profile name
+    display_name: Mercy Research Hospital  # create-only on the collaboration
+    stack_name: AirlockDataOwner
+  analyst:                                 # Account B (joins, queries, receives results, pays)
+    account_id: "444455556666"             # AWS documentation example ID; replace with your analyst account (quoted, 12 digits)
+    profile: airlock-b
+    display_name: State University Health Analytics   # create-only on the collaboration
+    stack_name: AirlockAnalyst
+
+collaboration:
+  name: Airlock Federated Research Clean Room
+  description: Synthetic-data demo of cross-institution research analysis with AWS Clean Rooms.
+  analytics_engine: SPARK                  # MVP: must be SPARK (Clean Rooms SQL support ended Dec 2025)
+  query_log_status: ENABLED                # collaboration (create-only) and both memberships
+  creator_member_abilities: []             # MVP: must be [] (A contributes data only)
+  analyst_member_abilities: [CAN_QUERY, CAN_RECEIVE_RESULTS]
+  query_compute_payer: analyst             # MVP: must be analyst
+
+storage:
+  data_bucket_prefix: airlock-a-data       # bucket = <prefix>-<account_id>-<region>
+  results_bucket_prefix: airlock-b-results
+  results_key_prefix: results/
+  result_format: CSV                       # CSV | PARQUET (both parsed by the demo)
+  single_file_output: true
+
+glue:
+  database_name: airlock_research
+
+privacy:
+  identity_column: patient_id              # output-constraint column, applied to every table
+  min_distinct_patients: 30                # THE threshold knob (2..100000)
+
+security:
+  pin_data_role_trust_to_query_runner: true   # deploy phase 3: pin data-role trust to B's membership ID
+
+logging:
+  warmup_seconds: 300                      # 0..3600: wait after newest membership createTime before queries
+  log_group_wait_seconds: 600              # 0..3600: extra wait for A's analysis log group to exist
+
+tables:
+  - key: patients
+    glue_table_name: patients
+    s3_prefix: patients/
+    configured_table_name: airlock-patients
+    association_name: patients             # table name used in SQL
+    description: Synthetic patient/clinical attributes (Institution A)
+    columns:                               # Glue schema; order = Parquet column order
+      - {name: patient_id,        type: string}
+      - {name: age,               type: int}
+      - {name: sex,               type: string}
+      - {name: region,            type: string}
+      - {name: primary_diagnosis, type: string}
+      - {name: baseline_hba1c,    type: double}
+      - {name: enrollment_date,   type: date}
+    allowed_columns: [patient_id, sex, region, primary_diagnosis, baseline_hba1c]
+    analysis_rule:
+      join_columns: [patient_id]
+      dimension_columns: [sex, region, primary_diagnosis]
+      aggregate_columns:
+        - {columns: [patient_id],     function: COUNT_DISTINCT}
+        - {columns: [patient_id],     function: COUNT}
+        - {columns: [baseline_hba1c], function: AVG}
+      scalar_functions: []
+  - key: outcomes
+    glue_table_name: outcomes
+    s3_prefix: outcomes/
+    configured_table_name: airlock-outcomes
+    association_name: outcomes
+    description: Synthetic treatment/outcome records (Institution A)
+    columns:
+      - {name: patient_id,       type: string}
+      - {name: medication_class, type: string}
+      - {name: procedure,        type: string}
+      - {name: followup_hba1c,   type: double}
+      - {name: followup_date,    type: date}
+      - {name: outcome_flag,     type: string}
+    allowed_columns: [patient_id, medication_class, outcome_flag, followup_hba1c]
+    analysis_rule:
+      join_columns: [patient_id]
+      dimension_columns: [medication_class, outcome_flag]
+      aggregate_columns:
+        - {columns: [patient_id],     function: COUNT_DISTINCT}
+        - {columns: [patient_id],     function: COUNT}
+        - {columns: [followup_hba1c], function: AVG}
+      scalar_functions: []
+
+research:
+  question: >-
+    Among adult diabetic patients, is there an association between a prescribed medication
+    class and improved glycemic outcomes (follow-up HbA1c), reported only as aggregates across the cohort?
+  approved_query_file: queries/approved/mean_hba1c_by_medication_class.sql
+  group_by_column: medication_class        # result column labelling groups (must be in result header)
+  count_column: patient_count              # result column = COUNT(DISTINCT identity_column)
+  derived_difference:                      # optional (null = off); computed client-side
+    name: mean_change
+    minuend: mean_followup_hba1c
+    subtrahend: mean_baseline_hba1c
+  blocked_queries:
+    - {id: select_patient_id, title: "Select patient_id (identifier)", file: queries/blocked/01_select_patient_id.sql,     expect: REJECTED}
+    - {id: row_level_select,  title: "Row-level SELECT *",           file: queries/blocked/02_row_level_select_star.sql, expect: REJECTED}
+    - {id: rare_class_filter, title: "Small group below threshold",   file: queries/blocked/03_rare_class_filter.sql,     expect: NO_ROWS}
+
+query:
+  compute: {worker_type: CR.1X, worker_count: 4}   # null = service default; worker_type CR.1X | CR.4X (CR.8X deliberately excluded for the MVP)
+  poll_interval_seconds: 5
+  timeout_seconds: 900
+
+data:
+  source: generator                        # generator | files
+  files_dir: data/generated/s3             # Parquet root uploaded to A's bucket: <files_dir>/<table.s3_prefix>*.parquet
+  generator:                               # used only when source=generator
+    seed: 20261022
+    patient_count: 3000
+    id_prefix: SYN-
+    age: {mean: 58, sd: 12, min: 18, max: 89}
+    sex_weights: {M: 0.48, F: 0.50, Other: 0.02}
+    region_weights: {Northeast: 0.20, Southeast: 0.22, Midwest: 0.20, Southwest: 0.16, West: 0.22}
+    diagnosis_weights: {"Type 2 Diabetes": 0.85, "Type 2 Diabetes with CKD": 0.10, "Type 2 Diabetes with CVD": 0.05}
+    procedure_weights: {"None": 0.70, "Diabetes self-management education": 0.20, "Medical nutrition therapy": 0.10}
+    enrollment_window: {start: "2025-01-01", days: 365}
+    followup_days: {min: 150, max: 210}
+    baseline_hba1c: {mean: 8.4, sd: 1.1, min: 6.5, max: 13.5}
+    followup_clip: {min: 5.0, max: 14.0}
+    outcome_thresholds: {improved_max_delta: -0.5, worsened_min_delta: 0.5}
+    medication_classes:                    # exact counts; must sum to patient_count
+      - {name: Metformin,   count: 1150, mean_change: -1.1, sd_change: 0.7}
+      - {name: GLP-1,       count: 700,  mean_change: -1.4, sd_change: 0.7}
+      - {name: SGLT2,       count: 650,  mean_change: -0.8, sd_change: 0.6}
+      - {name: DPP-4,       count: 488,  mean_change: -0.6, sd_change: 0.6}
+      - {name: Meglitinide, count: 12,   mean_change: -0.7, sd_change: 0.6}   # deliberately < threshold

@@ -1,0 +1,10 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+aws-cdk-lib==2.273.0
+aws-cdk.cloud-assembly-schema==54.26.0
+constructs==10.8.1
+boto3==1.43.117
+botocore==1.43.117
+pyarrow==26.0.0
+PyYAML==6.0.3

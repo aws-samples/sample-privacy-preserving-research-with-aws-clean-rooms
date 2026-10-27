@@ -1,0 +1,22 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+.venv/
+cdk.out/
+.state/
+data/generated/
+__pycache__/
+.pytest_cache/
+*.log
+*.pyc
+.DS_Store
+.kiro/settings/
+data/customer/
+.env
+.env.*
+.idea/
+.vscode/
+*.egg-info/
+.coverage
+htmlcov/
+node_modules/
