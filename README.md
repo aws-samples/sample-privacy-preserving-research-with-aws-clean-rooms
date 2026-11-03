@@ -5,7 +5,7 @@ Airlock shows two research institutions answering a shared medical-research ques
 - **Institution A, Mercy Research Hospital** (data owner, collaboration creator): owns the data, configures the tables, sets the privacy rules.
 - **Institution B, State University Health Analytics** (analyst): joins, runs approved queries, receives aggregate results in its own bucket, pays for query compute.
 
-Institution names are fictional.
+#### Note: The project name (airlock) and Institution names are fictional.
 
 All data is **synthetic** (seeded generator, see [`data/SCHEMA.md`](data/SCHEMA.md)). Airlock demonstrates technical controls that support privacy requirements. It makes no regulatory claim, and running it does not make any institution compliant with anything.
 
